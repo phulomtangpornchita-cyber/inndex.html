@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR ตีสระ ป.5 - สวนสระเรืองแสง</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Mali, Prompt, Kanit -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;700&family=Mali:wght@400;700&family=Prompt:wght@400;700&display=swap" rel="stylesheet">
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- Canvas Confetti -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Mali', 'Prompt', sans-serif;
+            user-select: none;
+            overflow: hidden;
+            touch-action: none;
+            background-color: #1a0f0a;
+        }
+        .hud-panel {
+            background-color: rgba(42, 26, 14, 0.78);
+            border: 2px solid #F2B441;
+        }
+    </style>
+</head>
+<body class="h-[100dvh] w-screen flex flex-col justify-between relative overflow-hidden">
+
+    <!-- ซ่อน Video Element ตามโครงสร้าง MediaPipe -->
+    <video id="webcam" class="hidden" playsinline muted autoplay></video>
+
+    <!-- Canvas หลัก เต็มจอ (เรนเดอร์ภาพกล้องผ่าน results.image ควบคู่กับ AR Object) -->
+    <canvas id="gameCanvas" class="absolute inset-0 w-full h-full z-0"></canvas>
+
+    <!-- Modal เริ่มต้นเกม / โหลดกล้อง -->
+    <div id="loading-modal" class="absolute inset-0 bg-black/85 z-50 flex flex-col items-center justify-center p-6 text-center">
+        <div class="hud-panel p-6 rounded-3xl max-w-sm w-full text-white shadow-2xl border-4 border-yellow-400">
+            <div class="text-5xl mb-3 animate-bounce">🌸✨</div>
+            <h2 class="text-xl font-bold text-yellow-300 mb-1">AR สวนสระเรืองแสง ปลุกดอกไม้บาน</h2>
+            <p class="text-xs text-amber-200 mb-2">ภาษาไทย ระดับ ป.5</p>
+            <p id="loading-text" class="text-xs text-amber-100 mb-4 bg-black/40 p-2.5 rounded-xl">กำลังเตรียมระบบกล้องและ AI...</p>
+            <div id="start-container" class="hidden">
+                <div class="text-left text-xs text-amber-100 bg-black/50 p-3.5 rounded-2xl mb-5 space-y-1.5 border border-amber-500/30">
+                    <p class="font-bold text-yellow-300">📌 วิธีเล่น (AR Dwell-to-Charge):</p>
+                    <p>1. อนุญาตให้ใช้งานกล้องและจัดวางตัวให้กล้องเห็นมือชัดเจน</p>
+                    <p>2. ยื่นปลายนิ้วชี้ไปอังเหนือดอกไม้ที่ตรงกับชื่อสระบนป้าย</p>
+                    <p>3. ค้างปลายนิ้วไว้นิ่งๆ จนวงเปลวไฟรอบดอกเต็มเพื่อยืนยันคำตอบ</p>
+                </div>
+                <button id="start-btn" onclick="requestCameraAndStart()" class="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold py-3 rounded-2xl text-sm shadow-xl transition transform active:scale-95">
+                    ✨ เข้าสู่สวนเวทมนตร์ ✨
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal กรณีถูกปฏิเสธการใช้กล้อง -->
+    <div id="permission-modal" class="absolute inset-0 bg-black/90 z-50 hidden flex flex-col items-center justify-center p-6 text-center">
+        <div class="hud-panel p-6 rounded-3xl max-w-sm w-full text-white border-4 border-red-500">
+            <div class="text-5xl mb-3">📷❌</div>
+            <h2 class="text-lg font-bold text-red-400 mb-2">ไม่สามารถเปิดใช้งานกล้องได้</h2>
+            <p class="text-xs text-amber-100 mb-5">โปรดตรวจสอบการอนุญาตกล้องในการตั้งค่าเบราว์เซอร์ของคุณ แล้วลองใหม่อีกครั้ง</p>
+            <button onclick="location.reload()" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-lg">
+                ลองใหม่อีกครั้ง 🔄
+            </button>
+        </div>
+    </div>
+
+    <!-- HUD ด้านบน (คะแนน, คอมโบ, ข้อที่) -->
+    <header class="w-full p-3 flex justify-between items-center z-10 pointer-events-none shrink-0">
+        <div class="hud-panel px-4 py-1.5 rounded-full text-white text-xs md:text-sm font-bold flex items-center space-x-3 shadow-lg">
+            <span id="score-disp" class="text-yellow-300">⭐ คะแนน: 0</span>
+            <span class="text-amber-500">|</span>
+            <span id="combo-disp" class="text-orange-300">🔥 คอมโบ: 0</span>
+        </div>
+        <div class="hud-panel px-4 py-1.5 rounded-full text-white text-xs md:text-sm font-bold shadow-lg">
+            <span id="round-disp" class="text-amber-200">ข้อที่ 1 / 10</span>
+        </div>
+    </header>
+
+    <!-- ป้ายโจทย์และข้อความฟีดแบ็กตรงกลางด้านบน -->
+    <div class="w-full flex flex-col items-center z-10 pointer-events-none px-4 shrink-0">
+        <div id="question-banner" class="hud-panel px-6 py-2.5 rounded-2xl text-center shadow-xl border-2 border-yellow-400 max-w-md w-full">
+            <p class="text-[11px] md:text-xs text-amber-200">🔮 ปลุกดอกไม้เวทมนตร์</p>
+            <h1 id="question-text" class="text-base md:text-xl font-extrabold text-yellow-300 mt-0.5">กำลังเตรียมโจทย์...</h1>
+        </div>
+        <div id="feedback-banner" class="mt-2 px-4 py-1 rounded-full text-white text-xs md:text-sm font-bold text-center border shadow-lg hidden">
+            <span></span>
+        </div>
+    </div>
+
+    <!-- ข้อความแจ้งเตือนเมื่อไม่พบมือ -->
+    <div id="hand-warning" class="absolute top-1/3 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-600/90 text-white px-5 py-2 rounded-full text-xs md:text-sm font-bold z-10 hidden shadow-xl animate-pulse pointer-events-none border border-red-300">
+        ⚠️ ยกมือให้กล้องเห็นเพื่อเล่นเกม
+    </div>
+
+    <!-- หน้าต่างสรุปผลเมื่อจบเกม -->
+    <div id="win-screen" class="absolute inset-0 bg-black/85 z-50 hidden flex flex-col items-center justify-center p-4 text-center">
+        <div class="hud-panel p-6 md:p-8 rounded-3xl max-w-md w-full text-white shadow-2xl border-4 border-yellow-400">
+            <div class="text-6xl mb-2 animate-bounce">🏆✨</div>
+            <h2 class="text-2xl font-extrabold text-yellow-300 mb-1">ยินดีด้วย! สวนเวทมนตร์สำเร็จแล้ว</h2>
+            <p class="text-amber-100 text-xs md:text-sm mb-4">คุณดูแลสวนสระเรืองแสงครบทั้ง 10 ข้อได้อย่างยอดเยี่ยม!</p>
+            <div id="final-stars" class="text-4xl mb-3">⭐⭐⭐</div>
+            <div class="text-xl md:text-2xl font-bold text-yellow-400 mb-1" id="final-score">⭐ คะแนนรวม: 0</div>
+            <div class="text-xs md:text-sm text-amber-200 mb-6" id="final-stats">ตอบถูกครั้งแรก: 0/10 | คอมโบสูงสุด: 0</div>
+            <button onclick="restartGame()" class="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold py-3 rounded-2xl text-sm md:text-base shadow-xl transition transform active:scale-95">
+                เล่นใหม่อีกครั้ง 🔄
+            </button>
+        </div>
+    </div>
+
+    <!-- Footer เครดิต -->
+    <footer class="w-full text-center py-2 text-[10px] md:text-xs text-amber-200/80 bg-black/60 backdrop-blur z-10 pointer-events-none shrink-0">
+        พัฒนาโดย นางสาวพรชิตา ภูล้อมทาง โรงเรียนบ้านวังกระแส
+    </footer>
+
+    <!-- WebAudio Sound Synthesizer -->
+    <script>
+        let audioCtx = null;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playDwellTick(percent) {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                const freq = 400 + (percent * 600);
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+            } catch(e) {}
+        }
+
+        function playCorrectSound() {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1046, audioCtx.currentTime); // 1046Hz สั้นๆ ตามโจทย์
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            } catch(e) {}
+        }
+
+        function playWrongSound() {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, audioCtx.currentTime); // 200Hz เสียงต่ำ
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.25);
+            } catch(e) {}
+        }
+    </script>
+
+    <!-- Core Game & MediaPipe Logic -->
+    <script>
+        const vowelDatabase = [
+            // ชุด ก (12 รูป)
+            { id: 'อะ', name: 'สระอะ', pair: 'อา', example: 'มะม่วง 🥭' },
+            { id: 'อา', name: 'สระอา', pair: 'อะ', example: 'ตา 👀' },
+            { id: 'อิ', name: 'สระอิ', pair: 'อี', example: 'ลิง 🐒' },
+            { id: 'อี', name: 'สระอี', pair: 'อิ', example: 'ผี 👻' },
+            { id: 'อึ', name: 'สระอึ', pair: 'อือ', example: 'ตึก 🏢' },
+            { id: 'อือ', name: 'สระอือ', pair: 'อึ', example: 'มือ ✋' },
+            { id: 'อุ', name: 'สระอุ', pair: 'อู', example: 'ลุง 👨' },
+            { id: 'อู', name: 'สระอู', pair: 'อุ', example: 'หมู 🐷' },
+            { id: 'เอ', name: 'สระเอ', pair: 'เอะ', example: 'เมฆ ☁️' },
+            { id: 'แอ', name: 'สระแอ', pair: 'แอะ', example: 'แมว 🐱' },
+            { id: 'โอ', name: 'สระโอ', pair: 'โอะ', example: 'โอ่ง 🏺' },
+            { id: 'ออ', name: 'สระออ', pair: 'เอาะ', example: 'หมอ 👨‍⚕️' },
+            // ชุด ข (8 รูป)
+            { id: 'เอะ', name: 'สระเอะ', pair: 'เอ', example: 'เตะ ⚽' },
+            { id: 'แอะ', name: 'สระแอะ', pair: 'แอ', example: 'แกะ 🐑' },
+            { id: 'โอะ', name: 'สระโอะ', pair: 'โอ', example: 'โต๊ะ 🪑' },
+            { id: 'เอาะ', name: 'สระเอาะ', pair: 'ออ', example: 'เกาะ 🏝️' },
+            { id: 'เออ', name: 'สระเออ', pair: 'เออะ', example: 'เธอ 👧' },
+            { id: 'เอีย', name: 'สระเอีย', pair: 'เอือ', example: 'เตียง 🛏️' },
+            { id: 'เอือ', name: 'สระเอือ', pair: 'เอีย', example: 'เสือ 🐯' },
+            { id: 'อัว', name: 'สระอัว', pair: 'อัวะ', example: 'หัว 🙂' },
+            // ชุด ค (8 รูป)
+            { id: 'อำ', name: 'สระอำ', pair: 'อะ', example: 'น้ำ 💧' },
+            { id: 'ใอ', name: 'สระใอ ไม้ม้วน', pair: 'ไอ', example: 'ใบไม้ 🍃' },
+            { id: 'ไอ', name: 'สระไอ ไม้มลาย', pair: 'ใอ', example: 'ไก่ 🐔' },
+            { id: 'เอา', name: 'สระเอา', pair: 'เอาะ', example: 'เขา ⛰️' },
+            { id: 'เออะ', name: 'สระเออะ', pair: 'เออ', example: 'เลอะ 🎨' },
+            { id: 'เอียะ', name: 'สระเอียะ', pair: 'เอีย', example: 'ขนมเปี๊ยะ 🥮' },
+            { id: 'เอือะ', name: 'สระเอือะ', pair: 'เอือ', example: 'สระเอือะ' },
+            { id: 'อัวะ', name: 'สระอัวะ', pair: 'อัว', example: 'สระอัวะ' }
+        ];
+
+        const praisePhrases = [
+            "เยี่ยม! ไข่ฟักแล้ว!", "เก่งมาก!", "ลูกมังกรออกมาแล้ว!", "จำรูปสระแม่นจัง!",
+            "สุดยอดผู้ดูแลมังกร!", "เป๊ะเลย!", "อบอุ่นกำลังดี!", "เก่งจัง!"
+        ];
+
+        const comfortingPhrases = [
+            "ยังไม่ใช่~ ลองอีกฟองนะ", "ฟองนี้ยังไม่ขยับ ลองใหม่!", "ไม่เป็นไร มังกรรออยู่",
+            "อ่านชื่อสระอีกครั้งนะ", "ค่อย ๆ นะ ไม่ต้องรีบ", "เกือบแล้ว!", "ลองฟองอื่นดูนะ", "สู้ ๆ นะ!"
+        ];
+
+        let score = 0;
+        let combo = 0;
+        let maxCombo = 0;
+        let roundIndex = 0;
+        let correctFirstTryCount = 0;
+        let totalRounds = 10;
+        let gameState = 'LOADING'; // LOADING, READING, PLAYING, REWARD, GAMEOVER
+        let stateTimer = 0;
+
+        let currentQuestion = null;
+        let flowers = [];
+        let fireflies = [];
+        let butterflies = [];
+
+        let palmX = -1, palmY = -1;
+        let activeFlowerIndex = -1;
+        let chargeProgress = 0;
+        let hasHand = false;
+        let handMissingTimer = 0;
+        let recentVowels = [];
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('webcam');
+
+        let camera = null;
+        let hands = null;
+
+        // สร้างหิ่งห้อยฉากหลัง
+        for (let i = 0; i < 35; i++) {
+            fireflies.push({
+                x: Math.random() * window.innerWidth,
+                y: Math.random() * window.innerHeight,
+                vx: (Math.random() - 0.5) * 0.5,
+                vy: (Math.random() - 0.5) * 0.5,
+                size: Math.random() * 3 + 1,
+                alpha: Math.random()
+            });
+        }
+
+        async function requestCameraAndStart() {
+            initAudio();
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } 
+                });
+                stream.getTracks().forEach(track => track.stop());
+                
+                document.getElementById('loading-modal').classList.add('hidden');
+                initMediaPipe();
+            } catch (err) {
+                console.error("Camera permission denied:", err);
+                document.getElementById('loading-modal').classList.add('hidden');
+                document.getElementById('permission-modal').classList.remove('hidden');
+            }
+        }
+
+        function initMediaPipe() {
+            hands = new Hands({
+                locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+            });
+            hands.setOptions({
+                selfieMode: true,
+                maxNumHands: 1,
+                modelComplexity: 0,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onHandResults);
+
+            camera = new Camera(video, {
+                onFrame: async () => {
+                    if (video.readyState >= 2) {
+                        await hands.send({ image: video });
+                    }
+                },
+                width: 960,
+                height: 720
+            });
+
+            camera.start().then(() => {
+                startGamePlay();
+            }).catch(err => {
+                console.error("Camera start error:", err);
+                document.getElementById('permission-modal').classList.remove('hidden');
+            });
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            navigator.mediaDevices.getUserMedia({ video: true })
+                .then(stream => {
+                    stream.getTracks().forEach(t => t.stop());
+                    document.getElementById('loading-text').innerText = "พร้อมเข้าสู่สวนเวทมนตร์แล้ว!";
+                    document.getElementById('start-container').classList.remove('hidden');
+                })
+                .catch(() => {
+                    document.getElementById('loading-text').innerText = "โปรดอนุญาตการใช้งานกล้องเพื่อเล่นเกม";
+                    document.getElementById('start-container').classList.remove('hidden');
+                });
+        });
+
+        function startGamePlay() {
+            score = 0;
+            combo = 0;
+            maxCombo = 0;
+            roundIndex = 0;
+            correctFirstTryCount = 0;
+            recentVowels = [];
+            document.getElementById('win-screen').classList.add('hidden');
+            nextRound();
+        }
+
+        function nextRound() {
+            if (roundIndex >= totalRounds) {
+                endGame();
+                return;
+            }
+
+            roundIndex++;
+            updateHUD();
+
+            let available = vowelDatabase.filter(v => !recentVowels.includes(v.id));
+            if (available.length === 0) available = vowelDatabase;
+            const correctVowel = available[Math.floor(Math.random() * available.length)];
+            
+            recentVowels.push(correctVowel.id);
+            if (recentVowels.length > 6) recentVowels.shift();
+
+            let distractorPool = vowelDatabase.filter(v => v.id !== correctVowel.id);
+            let pairVowel = vowelDatabase.find(v => v.id === correctVowel.pair);
+            
+            let distractors = [];
+            if (pairVowel && Math.random() > 0.3) {
+                distractors.push(pairVowel);
+                distractorPool = distractorPool.filter(v => v.id !== pairVowel.id);
+            }
+
+            while (distractors.length < 3 && distractorPool.length > 0) {
+                let idx = Math.floor(Math.random() * distractorPool.length);
+                distractors.push(distractorPool[idx]);
+                distractorPool.splice(idx, 1);
+            }
+
+            let roundFlowers = [
+                { vowel: correctVowel, isCorrect: true, state: 'normal', scale: 1, bloomPhase: 0 },
+                ...distractors.map(d => ({ vowel: d, isCorrect: false, state: 'normal', scale: 1, bloomPhase: 0 }))
+            ];
+
+            for (let i = roundFlowers.length - 1; i > 0; i--) {
+                let j = Math.floor(Math.random() * (i + 1));
+                [roundFlowers[i], roundFlowers[j]] = [roundFlowers[j], roundFlowers[i]];
+            }
+
+            const W = window.innerWidth;
+            const H = window.innerHeight;
+            const flowerSize = Math.min(W, H) * 0.20;
+            
+            // ตำแหน่งดอกไม้ 4 จุด รองรับทั้งจอแนวตั้งและแนวนอน (Desktop / Mobile)
+            const isLandscape = W > H;
+            let positions;
+            if (isLandscape) {
+                positions = [
+                    { x: W * 0.25, y: H * 0.52 },
+                    { x: W * 0.42, y: H * 0.52 },
+                    { x: W * 0.58, y: H * 0.52 },
+                    { x: W * 0.75, y: H * 0.52 }
+                ];
+            } else {
+                positions = [
+                    { x: W * 0.30, y: H * 0.38 },
+                    { x: W * 0.70, y: H * 0.38 },
+                    { x: W * 0.30, y: H * 0.68 },
+                    { x: W * 0.70, y: H * 0.68 }
+                ];
+            }
+
+            for (let i = positions.length - 1; i > 0; i--) {
+                let j = Math.floor(Math.random() * (i + 1));
+                [positions[i], positions[j]] = [positions[j], positions[i]];
+            }
+
+            flowers = roundFlowers.map((f, idx) => ({
+                ...f,
+                x: positions[idx].x,
+                y: positions[idx].y,
+                radius: flowerSize * 0.5,
+                shakeOffset: 0,
+                shakeTimer: 0
+            }));
+
+            currentQuestion = correctVowel;
+            
+            document.getElementById('question-text').innerText = `ปลุกดอก: ${correctVowel.name}`;
+            setFeedback("", false);
+
+            gameState = 'READING';
+            stateTimer = Date.now();
+            chargeProgress = 0;
+            activeFlowerIndex = -1;
+        }
+
+        function setFeedback(text, show = true, isCorrect = true) {
+            const banner = document.getElementById('feedback-banner');
+            if (!show || !text) {
+                banner.classList.add('hidden');
+                return;
+            }
+            banner.querySelector('span').innerText = text;
+            banner.className = `mt-2 px-4 py-1.5 rounded-full text-xs md:text-sm font-bold text-center border shadow-xl ${isCorrect ? 'bg-emerald-800/90 border-emerald-400 text-yellow-200' : 'bg-red-900/90 border-red-400 text-white'}`;
+            banner.classList.remove('hidden');
+        }
+
+        function updateHUD() {
+            document.getElementById('score-disp').innerText = `⭐ คะแนน: ${score}`;
+            document.getElementById('combo-disp').innerText = `🔥 คอมโบ: ${combo}`;
+            document.getElementById('round-disp').innerText = `ข้อที่ ${roundIndex} / ${totalRounds}`;
+        }
+
+        function onHandResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                hasHand = false;
+                return;
+            }
+            hasHand = true;
+            handMissingTimer = Date.now();
+
+            const landmarks = results.multiHandLandmarks[0];
+            const indexTip = landmarks[8];
+            
+            const W = window.innerWidth;
+            const H = window.innerHeight;
+
+            const vw = results.image.width;
+            const vh = results.image.height;
+            let sw, sh, sx, sy;
+            if (vw / vh > W / H) {
+                sh = vh; sw = vh * W / H; sx = (vw - sw) / 2; sy = 0;
+            } else {
+                sw = vw; sh = vw * H / W; sx = 0; sy = (vh - sh) / 2;
+            }
+
+            const targetX = ((indexTip.x * vw - sx) / sw) * W;
+            const targetY = ((indexTip.y * vh - sy) / sh) * H;
+
+            if (palmX === -1) {
+                palmX = targetX;
+                palmY = targetY;
+            } else {
+                palmX += (targetX - palmX) * 0.35;
+                palmY += (targetY - palmY) * 0.35;
+            }
+        }
+
+        let lastTime = Date.now();
+        function gameLoop() {
+            const now = Date.now();
+            const dt = now - lastTime;
+            lastTime = now;
+
+            const W = window.innerWidth;
+            const H = window.innerHeight;
+
+            // จัดการความละเอียด Canvas แบบ Retina/HiDPI
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+                canvas.width = W * dpr;
+                canvas.height = H * dpr;
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+
+            if (now - handMissingTimer > 1000) {
+                hasHand = false;
+            }
+            document.getElementById('hand-warning').style.display = (!hasHand && gameState === 'PLAYING') ? 'block' : 'none';
+
+            ctx.clearRect(0, 0, W, H);
+
+            // 1. วาดภาพกล้องเต็มจอ (Cover)
+            if (video.readyState >= 2) {
+                const vw = video.videoWidth || 960;
+                const vh = video.videoHeight || 720;
+                let sw, sh, sx, sy;
+                if (vw / vh > W / H) {
+                    sh = vh; sw = vh * W / H; sx = (vw - sw) / 2; sy = 0;
+                } else {
+                    sw = vw; sh = vw * H / W; sx = 0; sy = (vh - sh) / 2;
+                }
+                ctx.drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
+            }
+
+            // 2. ม่านสีธีมโปร่งแสงทับบางๆ ให้ตัวหนังสืออ่านง่าย (globalAlpha 0.40)
+            ctx.fillStyle = 'rgba(26, 15, 10, 0.40)';
+            ctx.fillRect(0, 0, W, H);
+
+            // 3. วาดหิ่งห้อยฉากหลัง
+            fireflies.forEach(f => {
+                f.x += f.vx;
+                f.y += f.vy;
+                if (f.x < 0) f.x = W; if (f.x > W) f.x = 0;
+                if (f.y < 0) f.y = H; if (f.y > H) f.y = 0;
+                
+                ctx.fillStyle = `rgba(142, 217, 255, ${f.alpha})`;
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, f.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // 4. State Machine การเล่นเกม
+            if (gameState === 'READING') {
+                if (now - stateTimer > 2000) {
+                    gameState = 'PLAYING';
+                }
+            } else if (gameState === 'PLAYING' && hasHand) {
+                let closestIdx = -1;
+                let minDist = Infinity;
+                const TOL = 40 * Math.min(W, H) / 700;
+
+                flowers.forEach((f, idx) => {
+                    const dist = Math.hypot(palmX - f.x, palmY - f.y);
+                    if (dist < f.radius * 1.2 + TOL && dist < minDist) {
+                        minDist = dist;
+                        closestIdx = idx;
+                    }
+                });
+
+                if (closestIdx !== -1) {
+                    if (activeFlowerIndex !== closestIdx) {
+                        activeFlowerIndex = closestIdx;
+                        chargeProgress = 0;
+                    }
+
+                    chargeProgress = Math.min(1, chargeProgress + dt / 800);
+                    playDwellTick(chargeProgress);
+
+                    if (chargeProgress >= 1) {
+                        processAnswer(activeFlowerIndex);
+                    }
+                } else {
+                    activeFlowerIndex = -1;
+                    chargeProgress = Math.max(0, chargeProgress - dt / 400);
+                }
+            } else if (gameState === 'PLAYING' && !hasHand) {
+                chargeProgress = Math.max(0, chargeProgress - dt / 400);
+                activeFlowerIndex = -1;
+            }
+
+            // อัปเดตและวาดผีเสื้อทอง
+            butterflies.forEach((b, index) => {
+                b.x += b.vx;
+                b.y += b.vy;
+                b.alpha -= 0.01;
+                if (b.alpha <= 0) {
+                    butterflies.splice(index, 1);
+                    return;
+                }
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, b.alpha);
+                ctx.font = '26px Mali';
+                ctx.fillText('🦋', b.x, b.y);
+                ctx.restore();
+            });
+
+            // 5. วาดดอกไม้เวทมนตร์ทั้ง 4 ดอก
+            flowers.forEach((f, idx) => {
+                ctx.save();
+                ctx.translate(f.x + f.shakeOffset, f.y);
+
+                const r = f.radius * f.scale;
+
+                // ก้านและใบไม้เรืองแสง
+                ctx.strokeStyle = '#4FD98C';
+                ctx.lineWidth = 6;
+                ctx.beginPath();
+                ctx.moveTo(0, r);
+                ctx.quadraticCurveTo(15, r + 25, 22, r + 45);
+                ctx.stroke();
+
+                // กลีบดอกไม้ 5 กลีบ
+                for (let i = 0; i < 5; i++) {
+                    const angle = (i * Math.PI * 2) / 5;
+                    const petalX = Math.cos(angle) * (r * 0.5);
+                    const petalY = Math.sin(angle) * (r * 0.5);
+                    
+                    ctx.fillStyle = '#FFF1DC';
+                    ctx.beginPath();
+                    ctx.arc(petalX, petalY, r * 0.55, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#C98A4B';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+                // เกสรกลางดอก
+                ctx.fillStyle = '#E4572E';
+                ctx.beginPath();
+                ctx.arc(0, 0, r * 0.35, 0, Math.PI * 2);
+                ctx.fill();
+
+                // ตัวสระบนกลีบ
+                ctx.fillStyle = '#3E2A18';
+                ctx.font = `bold ${Math.max(20, r * 0.45)}px Mali, Prompt`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(f.vowel.id, 0, 2);
+
+                // วงเปลวไฟส้ม-ทองหมุนตามเข็มนาฬิกา (Dwell Progress)
+                if (idx === activeFlowerIndex && gameState === 'PLAYING' && chargeProgress > 0) {
+                    ctx.strokeStyle = '#FF9F45';
+                    ctx.lineWidth = 6;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, r * 1.18, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * chargeProgress));
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+
+                if (f.shakeTimer > 0) {
+                    f.shakeTimer -= dt;
+                    f.shakeOffset = Math.sin(f.shakeTimer * 0.05) * 8;
+                } else {
+                    f.shakeOffset = 0;
+                }
+            });
+
+            // 6. วาดไออุ่นและเรติเคิลปลายนิ้วชี้
+            if (hasHand && palmX !== -1 && gameState === 'PLAYING') {
+                ctx.save();
+                ctx.strokeStyle = 'rgba(255, 159, 69, 0.45)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(palmX, palmY, 30 + Math.sin(now * 0.01) * 6, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.fillStyle = '#FFE08A';
+                ctx.beginPath();
+                ctx.arc(palmX, palmY, 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#FF9F45';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function processAnswer(flowerIdx) {
+            const selectedFlower = flowers[flowerIdx];
+            const isCorrect = selectedFlower.isCorrect;
+
+            if (isCorrect) {
+                playCorrectSound();
+                gameState = 'REWARD';
+                
+                const isFirstTry = selectedFlower.scale === 1;
+                if (isFirstTry) {
+                    correctFirstTryCount++;
+                }
+
+                score += 100;
+                combo++;
+                if (combo > maxCombo) maxCombo = combo;
+
+                if (combo > 1) {
+                    let bonus = 20 * (combo - 1);
+                    if (bonus > 100) bonus = 100;
+                    score += bonus;
+                }
+
+                updateHUD();
+
+                const praise = praisePhrases[Math.floor(Math.random() * praisePhrases.length)];
+                setFeedback(`${praise} | รางวัล: ${selectedFlower.vowel.example}`, true, true);
+
+                confetti({ particleCount: 60, spread: 70, origin: { y: 0.5 } });
+
+                for (let i = 0; i < 6; i++) {
+                    butterflies.push({
+                        x: selectedFlower.x + (Math.random() - 0.5) * 40,
+                        y: selectedFlower.y + (Math.random() - 0.5) * 40,
+                        vx: (Math.random() - 0.5) * 3,
+                        vy: -Math.random() * 3 - 1,
+                        alpha: 1.0
+                    });
+                }
+
+                setTimeout(() => {
+                    nextRound();
+                }, 1500);
+
+            } else {
+                playWrongSound();
+                selectedFlower.shakeTimer = 300;
+                
+                combo = 0;
+                updateHUD();
+
+                const comforting = comfortingPhrases[Math.floor(Math.random() * comfortingPhrases.length)];
+                setFeedback(comforting, true, false);
+
+                chargeProgress = 0;
+                activeFlowerIndex = -1;
+                
+                setTimeout(() => {
+                    gameState = 'PLAYING';
+                }, 400);
+            }
+        }
+
+        function endGame() {
+            gameState = 'GAMEOVER';
+            setFeedback("", false);
+
+            let stars = 1;
+            if (correctFirstTryCount >= 9) stars = 3;
+            else if (correctFirstTryCount >= 6) stars = 2;
+
+            let starStr = '⭐'.repeat(stars);
+            document.getElementById('final-stars').innerText = starStr;
+            document.getElementById('final-score').innerText = `⭐ คะแนนรวม: ${score}`;
+            document.getElementById('final-stats').innerText = `ตอบถูกครั้งแรก: ${correctFirstTryCount}/10 | คอมโบสูงสุด: ${maxCombo}`;
+            
+            document.getElementById('win-screen').classList.remove('hidden');
+            confetti({ particleCount: 160, spread: 100, origin: { y: 0.4 } });
+        }
+
+        function restartGame() {
+            document.getElementById('win-screen').classList.add('hidden');
+            startGamePlay();
+        }
+
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
